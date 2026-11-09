@@ -2002,7 +2002,11 @@ void retire_pool(std::map<uint64_t, Pool>::iterator it) {
     // 64 bytes, stores through the page table) was lost here: the new pool's mirror is filled from guest memory. Kokiri's
     // foliage records, written by the GPU while the scene loaded and its pools were remade larger, came out zero: every
     // count 0, the trees' leaf clusters never drawn. RX_VK_NO_INHERIT=1: as before
-    static const bool no_inherit = getenv("RX_VK_NO_INHERIT") != nullptr;
+    // (hookshot: off by default. The new pool's mirror is copied from guest memory first, and the retired pool's mirror over it then
+    // put back what the game had since loaded there: loaded in the Deku Tree and gone outside, Kokiri Forest's light grid
+    // (ee7764a6b1ef459c) read the tree's data and came out black, the light overbright and the caves wrong. RX_VK_INHERIT=1: as before;
+    // RX_VK_NO_INHERIT=1 still says off)
+    static const bool no_inherit = getenv("RX_VK_NO_INHERIT") != nullptr || getenv("RX_VK_INHERIT") == nullptr;
     if (old->mstate == Pool::MIRROR_ON && !no_inherit) old->inherit_pending = true, old->retired_epoch = mirror_epoch;
     pools_gen++;
     retired_pools.push_back(imported.extract(it));
