@@ -5977,15 +5977,15 @@ bool dlss_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     if (st.info.texture_descriptors.size() != 1 || st.info.image_descriptors.size() != 1) return false;
     size_t ntex = 0;   // (build_descriptors' image infos: the textures', then the images')
     for (const auto& d : st.info.texture_descriptors) ntex += d.count;
-    if (dw.imgs.size() <= ntex || !dw.imgs[0].imageView || !dw.imgs[ntex].imageView || draw_sampled.empty()) return false;
-    const Texture* in = draw_sampled[0];
+    if (dw().imgs.size() <= ntex || !dw().imgs[0].imageView || !dw().imgs[ntex].imageView || draw_sampled().empty()) return false;
+    const Texture* in = draw_sampled()[0];
     const auto& od = st.info.image_descriptors[0];
     Texture* out = nullptr;
     uint32_t level = 0;
     const uint32_t handle = handle_of(s, st, od, 0);
     if (!handle) return false;
     texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
-    const bool done = dlss_dispatch(cmd, p.key, dw.imgs[0].imageView, in, dw.imgs[ntex].imageView, out, level);
+    const bool done = dlss_dispatch(cmd, p.key, dw().imgs[0].imageView, in, dw().imgs[ntex].imageView, out, level);
     descriptors_disturbed();   // (DLSS and its passes bound their own: the network's next pushes all of its own)
     return done;
 }
