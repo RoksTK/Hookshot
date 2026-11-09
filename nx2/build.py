@@ -712,7 +712,7 @@ def main():
             "-I" + os.path.join(vk, "sirit", "include"), "-I" + os.path.join(vk, "sirit", "src"),
             "-I" + os.path.join(spirv_headers, "include"), "-I" + os.path.join(spirv_headers, "include", "spirv", "unified1"),
             "-I" + os.path.join(vk_headers, "include"), "-I" + vk,
-            "-I" + os.path.join(kit.HERE, "..", "third_party", "streamline", "include")] +   # (hookshot: NVIDIA Streamline's MIT headers, vk_dlss.cpp)             (["-I" + os.path.join(cpm_package("vulkanmemoryallocator"), "include")] if cpm_package("vulkanmemoryallocator") else [])
+            "-I" + os.path.join(kit.HERE, "..", "third_party", "streamline", "include")] + (["-I" + os.path.join(cpm_package("vulkanmemoryallocator"), "include")] if cpm_package("vulkanmemoryallocator") else [])
         # (Eden's recompiler and sirit see only their own headers: a change to the back end's vk_*.h does not
         # rebuild their ~500 files; the back end itself depends on everything, suyu's texture decoders included)
         vk_lib_deps = tree_headers(os.path.join(vk, "eden"), os.path.join(vk, "sirit"), os.path.join(vk, "compat"),
@@ -876,7 +876,7 @@ def main():
         else:
             link = [cc] + toolchain.native_target() + toolchain.native_link() + \
                 ["-shared", "-o", vdll, toolchain.link_opt("/map:" + vdll[:-4] + ".map"), "@" + vrsp, "-luser32", "-lgdi32",
-                 "-lwintrust", "-lcrypt32", "-lversion"] +   # (hookshot, vk_dlss.cpp: NVIDIA's signatures and DLSS's version)                 (["-lc++", "-lunwind"] if toolchain.mingw() else [])
+                 "-lwintrust", "-lcrypt32", "-lversion"] + (["-lc++", "-lunwind"] if toolchain.mingw() else [])
         r = subprocess.run(link, capture_output=True, text=True)
         if r.returncode:
             undefined = sorted({l.strip() for l in (r.stdout + r.stderr).splitlines() if "undefined symbol" in l})
