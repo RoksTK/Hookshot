@@ -489,6 +489,12 @@ Row rows[] = {
     {TAB_GRAPHICS, "Robust buffers", &opts.robust, 0, 2, 1, tx_robust,
      "Bounds-checked buffer reads: a read past a buffer's end is dropped instead of stopping the GPU. Applies after a "
      "restart.", hn_robust, true},
+    {TAB_GRAPHICS, "Descriptor reuse", &opts.descriptor_reuse, 0, 1, 1, tx_onoff,
+     "A draw keeps its descriptors while the texture slots it samples are unchanged, so streaming elsewhere in the game no longer "
+     "rebuilds every set each frame. Applies after restart.", nullptr, true},
+    {TAB_GRAPHICS, "Sampler cache", &opts.sampler_cache, 0, 1, 1, tx_onoff,
+     "What a sampler holds is kept beside it on the replay thread, so resolving a sampler that was not registered anew takes no "
+     "lock. Helps while the game streams textures. Applies after restart.", nullptr, true},
 
     // Gameplay
     {TAB_GAMEPLAY, "FPS counter", &opts.show_fps, 0, 1, 1, tx_onoff, "Frames per second in the top right corner.", hn_fps,

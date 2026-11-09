@@ -64,6 +64,8 @@ void draw_stats2(int64_t* passes, int64_t* mesh, double* pipeline_ms);
 void draw_stats3(int64_t* pending_skips, int64_t* waits, double* wait_ms);
 void draw_skip_report(double frames);   // (hookshot) skips by the line that made them
 int64_t draw_desc_reused();
+/// (RX_VK_DESC_SLOTGEN) Of those, the reuses the global registrations' generation check would have rebuilt for
+int64_t draw_slotgen_saves();
 /// RX_VK_FLASH_RECORD=<key>,...: the last frames' draws of those programs, written to the log for frames around a flash
 void draw_records_log(uint64_t frame_lo, uint64_t frame_hi);
 void pass_traces_log(uint64_t frame_lo, uint64_t frame_hi);   // (RX_VK_PASS_TRACE=1)

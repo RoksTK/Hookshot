@@ -2453,9 +2453,10 @@ void log_frame_stats() {
         draw_stats3(&pskip, &pwaits, &pwait_ms);
         static int64_t l_pskip, l_pwaits;
         static double l_pwait_ms;
-        static int64_t l_reused;
-        logf("vk: a frame: %.0f draws kept their neighbour's descriptors", (draw_desc_reused() - l_reused) / 120.0);
-        l_reused = draw_desc_reused();
+        static int64_t l_reused, l_saves;
+        logf("vk: a frame: %.0f draws kept their neighbour's descriptors (%.0f of them through other slots' registrations)",
+             (draw_desc_reused() - l_reused) / 120.0, (draw_slotgen_saves() - l_saves) / 120.0);
+        l_reused = draw_desc_reused(), l_saves = draw_slotgen_saves();
         logf("vk: a frame: %.1f draws left out (not ready), %.2f waits for shaders or pipelines (%.1f ms); "
              "translation %.0f ms in all, %d jobs queued",
              (pskip - l_pskip) / 120.0, (pwaits - l_pwaits) / 120.0, (pwait_ms - l_pwait_ms) / 120.0,
