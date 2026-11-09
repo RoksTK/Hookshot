@@ -112,6 +112,9 @@ static void pads_poll(void) {
             count++;
             for (int k = BTN_A; k <= BTN_RIGHT; k++)   /* (SDL3's gamepad buttons are in SDL2's order) */
                 if (hos_sdl_pad_button(gc, k)) b |= 1ULL << k;
+            /* R4 (the right back paddle: SDL2's PADDLE1 and SDL3's RIGHT_PADDLE1 are both 16) is a second A:
+               bit 17, past the HOS_PAD positions, which host/nn_hid.c adds to A whatever A is bound to */
+            if (hos_sdl_pad_button(gc, 16)) b |= 1ULL << 17;
             if (hos_sdl_pad_axis(gc, AX_LT) > 8000) b |= 1ULL << HOS_PAD_LTRIGGER;
             if (hos_sdl_pad_axis(gc, AX_RT) > 8000) b |= 1ULL << HOS_PAD_RTRIGGER;
             int rx_option(int id, int otherwise);

@@ -572,6 +572,7 @@ static void pads_read(uint64_t *buttons, int32_t stick[4]) {
     uint64_t b = 0;
     for (int i = 0; i < HOS_SW_N; i++)
         if (pad_bind[i] >= 0 && (raw >> pad_bind[i] & 1)) b |= 1ULL << i;
+    if (raw >> 17 & 1) b |= 1ULL << HOS_SW_A;   /* R4 (host/pad_sdl.c) */
     cached_buttons = b;
     memcpy(cached_stick, s, sizeof s);
     *buttons |= b;
