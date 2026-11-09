@@ -1,0 +1,16 @@
+#version 450
+// (hookshot) NVIDIA DLSS in place of OoT's upscale networks (vk_dlss.cpp): DLSS's output into the network's own output image.
+// The network squares its square-root-encoded input as it writes the linear scene colour: the same here. After Eden's/Lichii's
+// OoT DLSS (Fritchii, host_shaders/ocarina_dlss_output.comp).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, r11f_g11f_b10f) uniform writeonly image2D dst;
+layout(push_constant) uniform P { ivec2 size; } pc;
+void main() {
+    const ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, pc.size))) return;
+    const vec3 s = all(equal(textureSize(src, 0), pc.size)) ? texelFetch(src, g, 0).rgb
+                                                             : textureLod(src, (vec2(g) + 0.5) / vec2(pc.size), 0.0).rgb;
+    const vec3 c = max(s, vec3(0.0));
+    imageStore(dst, g, vec4(c * c, 1.0));
+}

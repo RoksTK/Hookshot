@@ -1,0 +1,13 @@
+#version 450
+// (hookshot) NVIDIA DLSS in place of OoT's upscale networks (vk_dlss.cpp): the network's input, the square root of the scene
+// colour in RGB9E5, copied into an RGBA16F image DLSS can read. The encoding stays: DLSS gets it as LDR colour, and
+// dlss_output.comp squares DLSS's output as the network does. After Eden's/Lichii's OoT DLSS (Fritchii,
+// host_shaders/ocarina_dlss_color.comp).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba16f) uniform writeonly image2D dst;
+void main() {
+    const ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, imageSize(dst)))) return;
+    imageStore(dst, g, vec4(max(texelFetch(src, g, 0).rgb, vec3(0.0)), 1.0));
+}

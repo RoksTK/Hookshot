@@ -22,6 +22,7 @@
 #include "vk_paths.h"
 #include "vk_menu.h"
 #include "vk_menu_hit.h"
+#include "vk_dlss.h"
 #include "oot_cheat_items.h"
 #include "vk_startup_paint.h"
 #include "vk_work.h"   // (after the others: counts the commands that do GPU work, for full_barrier)
@@ -92,7 +93,9 @@ int step_output_choice(int id, int dir) {
 Out shown_output() {
     return opts.handheld ? Out{1536, 864} : kOutputs[output_choice(opts.output_res)];
 }
-constexpr int kResPercent[] = {0, 100, 75, 67, 50};
+// (hookshot) The Resolution row: 0 Auto, then 1-9 for 12/12 down to 4/12 of the output, every twelfth the game draws exactly (below)
+constexpr int kResSteps = 9;
+int res_twelfths(int v) { return v >= 1 && v <= kResSteps ? 13 - v : 0; }
 // The size the game draws the 3D at for a fixed scale of its output, a twelfth of it: every twelfth asked came out exact at the three
 // outputs (2048x1152: 0.58 drew 1195x672, 0.6667 1366x768). So the scale the game is given is the twelfth too: 0.67 drew 2615x1471 at
 // 3840x2160, not the 2560x1440 of 8/12.
@@ -104,11 +107,22 @@ void game_size(float scale, uint32_t& w, uint32_t& h) {
 }
 const char* tx_resolution(int v) {
     static char b[48];
-    if (v <= 0 || v > 4) return "Auto (dynamic)";
+    if (v <= 0 || v > kResSteps) return "Auto (dynamic)";
     uint32_t w, h;
-    game_size(kResPercent[v] / 100.0f, w, h);
-    snprintf(b, sizeof b, "%d%% (%ux%u)", kResPercent[v], w, h);
+    game_size(res_twelfths(v) / 12.0f, w, h);
+    snprintf(b, sizeof b, "%d%% (%ux%u)", (res_twelfths(v) * 100 + 6) / 12, w, h);
     return b;
+}
+// (hookshot, vk_dlss.cpp) NVIDIA DLSS in place of the game's upscale networks
+const char* tx_dlss(int v) {
+    const int st = dlss_state();
+    if (st == 0) return v ? "On (restart)" : "Off";
+    if (st == 1) return v ? "On (not available here)" : "Off";
+    return v ? "On" : "Off";
+}
+const char* tx_dlss_preset(int v) {
+    static const char* t[] = {"NVIDIA's choice", "J", "K", "L", "M"};
+    return (unsigned)v < 5 ? t[v] : t[0];
 }
 const char* tx_output_res(int v) {
     static char b[48];
@@ -191,11 +205,11 @@ void sync_preset_budgets(int p) {
 void apply_preset(int p) {
     switch (p) {
     case 1: // Minimum (4GB VRAM / iGPU)
-        opts.resolution = 4; opts.upscale = 2; opts.sharpness = 50;
+        opts.resolution = 7; opts.upscale = 2; opts.sharpness = 50;
         opts.framegen = 2;   opts.pace = 1;    opts.realtime = 1; opts.handheld = 1;
         break;
     case 2: // Low (6GB VRAM)
-        opts.resolution = 2; opts.upscale = 2; opts.sharpness = 35;
+        opts.resolution = 4; opts.upscale = 2; opts.sharpness = 35;
         opts.framegen = 2;   opts.pace = 1;    opts.realtime = 1; opts.handheld = 1;
         break;
     case 3: // Balanced (8GB VRAM)
@@ -229,9 +243,15 @@ Row rows[] = {
      "can show artifacts."},
     {TAB_GRAPHICS, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff,
      "Shows each frame at an even interval instead of as soon as it is ready. Less stutter, at up to one frame of delay."},
-    {TAB_GRAPHICS, "Resolution", &opts.resolution, 0, 4, 1, tx_resolution,
+    {TAB_GRAPHICS, "Resolution", &opts.resolution, 0, kResSteps, 1, tx_resolution,
      "How sharp the 3D is drawn. Auto lets the game lower it when the GPU is busy. A fixed percentage stays steady: lower is "
-     "faster."},
+     "faster. With NVIDIA DLSS on, DLSS makes the rest up to the output: 100% is DLAA, 75% about its Quality mode."},
+    {TAB_GRAPHICS, "NVIDIA DLSS", &opts.dlss, 0, 1, 1, tx_dlss,
+     "NVIDIA DLSS in place of the game's own upscaler, on GeForce RTX cards. Needs NVIDIA Streamline's files in a streamline folder "
+     "in the game folder, or Fritchii's. Switching it on the first time applies after a restart."},
+    {TAB_GRAPHICS, "DLSS preset", &opts.dlss_preset, 0, 4, 1, tx_dlss_preset,
+     "The DLSS model. M is the newest and sharpest, K a little softer and lighter on the GPU. NVIDIA's choice picks one per "
+     "resolution."},
     {TAB_GRAPHICS, "Output resolution", &opts.output_res, 0, kLastOutput, 1, tx_output_res,
      "The size the game draws its whole frame at, HUD included, before it is scaled to your window. The 3D is drawn at the "
      "Resolution percentage of it. Docked only. Applies after a restart."},
@@ -1272,8 +1292,8 @@ void menu_init() {
 
 bool resolution_auto() { return opts.resolution == 0; }
 int resolution_scale() {
-    const float s = opts.resolution > 0 && opts.resolution <= 4 ? kResPercent[opts.resolution] / 100.0f : 0;
-    return s > 0 ? (int)(twelfths(s) * 10000.0f / 12.0f + 0.5f) : 0;   // (the twelfth game_size labels)
+    const int k = res_twelfths(opts.resolution);
+    return k > 0 ? (int)(k * 10000.0f / 12.0f + 0.5f) : 0;   // (the twelfth game_size labels)
 }
 
 void menu_set_gpu_count(int count) {
