@@ -84,6 +84,9 @@ static int pads_start(void) {
     /* (SDL2: PlayStation pads' rumble asked for; SDL3 turns it on when a rumble is first sent) */
     hos_sdl_hint("SDL_JOYSTICK_HIDAPI_PS5_RUMBLE", "1");
     hos_sdl_hint("SDL_JOYSTICK_HIDAPI_PS4_RUMBLE", "1");
+    /* (SDL's own Steam Controller driver, with its gyroscope and accelerometer: off by default, as Steam Input usually has
+       the pad; Eden and its forks turn it on. Without Steam Input on the pad, its motion reaches the game this way) */
+    hos_sdl_hint("SDL_JOYSTICK_HIDAPI_STEAM", "1");
     /* (the map below is by position; SDL2 reports Nintendo pads by their labels unless told not to, which put a Switch Pro
        Controller's A, on the right, at the bottom button's place: A acted as B and X as Y: SkyboundTotk issue 12. SDL3's
        are by position always) */
