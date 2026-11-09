@@ -9,7 +9,7 @@ namespace mkwvk {
 struct Options {
     int framegen = 0;     // made frames: 0 off, or 2, 3, 4 times the game's frames
     int pace = 0;         // frames shown on an even line (vk_framegen.cpp)
-    int resolution = 0;   // the 3D's: 0 Auto (the game's dynamic resolution), else 100%, 75%, 67%, 50% of its full scale (nx2/oot_patches.py)
+    int resolution = 0;   // the 3D's: 0 Auto (the game's dynamic resolution), else 1-9: 12/12 down to 4/12 of its full scale (nx2/oot_patches.py)
     int output_res = 0;   // the game's whole frame, docked: 0 its 2048x1152, 1 2560x1440, 2 3840x2160; read once, at the start (host/nn_applet.c)
     int upscale = 0;      // to the window: 0 off (the plain copy to the window), 1 Catmull-Rom, 2 Lanczos
     int sharpness = 0;    // 0 to 100
@@ -31,6 +31,8 @@ struct Options {
     int preset = 0;       // quality preset: 0 Custom, 1 Minimum (4GB), 2 Low (6GB), 3 Balanced (8GB), 4 High (12GB), 5 Ultra (16GB+)
     int vram_mb = 0;      // dynamic texture cache budget limit in MB
     int mirror_mb = 0;    // staging mirror limit in MB
+    int dlss = 1;         // (hookshot) NVIDIA DLSS in place of the game's upscale networks (gpu/vk/vk_dlss.cpp; RX_VK_DLSS)
+    int dlss_preset = 4;  // its model: 0 NVIDIA's choice, 1-4 J, K, L, M (RX_VK_DLSS_PRESET)
 };
 extern Options opts;
 /// (vk_memory.cpp) true when the quality preset's memory budgets (vram_mb, mirror_mb) are to be used: the card has no more

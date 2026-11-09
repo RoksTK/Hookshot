@@ -27,6 +27,7 @@
 
 #include "vk_paths.h"
 #include "vk_draw.h"
+#include "vk_dlss.h"
 #include "vk_dump.h"
 #include "vk_gprof.h"
 #include "vk_jobs.h"
@@ -4633,6 +4634,13 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     }
     const Targets at = bare_targets(s, targets(s));
     if (!at.width || !at.height) SKIP_HERE();
+    // (hookshot, vk_dlss.cpp) a scene draw's camera and depth, for DLSS in place of the upscale networks
+    if (at.n >= 1 && at.depth && at.color_format[0] == VK_FORMAT_B10G11R11_UFLOAT_PACK32 && at.width >= 640 && dlss_active()) {
+        const nvn_p_bind_buf& c3 = s.ubo[0][0];
+        alignas(16) uint8_t camera[0x230];
+        if (c3.addr && c3.size >= sizeof camera && ub_read(c3.addr, camera, sizeof camera))
+            dlss_note_draw(camera, c3.size, at.width, at.height, at.color_format[0], at.depth, at.depth_level);
+    }
     uint8_t types[8];
     for (int i = 0; i < 8; i++) {
         const VkFormat f = i < at.n ? at.color_format[i] : VK_FORMAT_UNDEFINED;
@@ -5584,6 +5592,27 @@ bool taau_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
     return typed_upscale(cmd, dw.imgs[0].imageView, dw.imgs[ntex].imageView, out, level, p.key, keys, true);
 }
 
+/// (hookshot) NVIDIA DLSS in place of OoT's upscale networks (vk_dlss.cpp): the network's input (its one texture) and output (its one
+/// image) as its own descriptors bind them. False: the network runs
+bool dlss_stand_in(VkCommandBuffer cmd, const NvnState& s, const Program& p) {
+    if (p.stages.empty()) return false;
+    const Stage& st = p.stages[0];
+    if (st.info.texture_descriptors.size() != 1 || st.info.image_descriptors.size() != 1) return false;
+    size_t ntex = 0;   // (build_descriptors' image infos: the textures', then the images')
+    for (const auto& d : st.info.texture_descriptors) ntex += d.count;
+    if (dw.imgs.size() <= ntex || !dw.imgs[0].imageView || !dw.imgs[ntex].imageView || draw_sampled.empty()) return false;
+    const Texture* in = draw_sampled[0];
+    const auto& od = st.info.image_descriptors[0];
+    Texture* out = nullptr;
+    uint32_t level = 0;
+    const uint32_t handle = handle_of(s, st, od, 0);
+    if (!handle) return false;
+    texture_view_of(handle, VK_IMAGE_VIEW_TYPE_2D, ViewUse::Storage, image_format(od.format), &out, &level);
+    const bool done = dlss_dispatch(cmd, p.key, dw.imgs[0].imageView, in, dw.imgs[ntex].imageView, out, level);
+    descriptors_disturbed();   // (DLSS and its passes bound their own: the network's next pushes all of its own)
+    return done;
+}
+
 bool precompile_wanted() {
 #if defined(HOOKSHOT_RELEASE)
     bool on = true;
@@ -6151,6 +6180,7 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
             logf("%s", line);
         }
     }
+    if (dlss_key(p.key) && dlss_stand_in(cmd, s, p)) return void(st_dispatches++);
     if (taau_stand_in(cmd, s, p)) return void(st_dispatches++);
     if (!p.compute_pipeline) SKIP_HERE();
     dump_ssbos(cmd, p, "before");

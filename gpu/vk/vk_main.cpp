@@ -17,6 +17,7 @@
 #include "vk_internal.h"
 #include "gpu_choice.h"
 #include "vk_menu.h"
+#include "vk_dlss.h"
 
 namespace vkx {
 #define VKX_DEFINE(f) PFN_##f f;
@@ -87,8 +88,10 @@ bool create_instance() {
         return false;
     }
 #ifdef _WIN32
-    const char* exts[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
-    const uint32_t n_exts = 2;
+    std::vector<const char*> ext_list = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+    dlss_instance_extensions(ext_list);   // (hookshot, vk_dlss.cpp: what NVIDIA Streamline asks for)
+    const char* const* exts = ext_list.data();
+    const uint32_t n_exts = (uint32_t)ext_list.size();
 #else
     // (linux: every window system's surface the loader has, for whichever one SDL's window is on: X11 or Wayland)
     const char* exts[4] = {VK_KHR_SURFACE_EXTENSION_NAME};
@@ -228,6 +231,7 @@ bool create_device() {
         optional(VK_AMD_BUFFER_MARKER_EXTENSION_NAME, dev.buffer_marker);
     optional(VK_EXT_DEVICE_FAULT_EXTENSION_NAME, dev.device_fault);
     optional(VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, dev.coop_matrix);
+    dlss_device_extensions(want, exts);   // (hookshot, vk_dlss.cpp: what NVIDIA Streamline asks for)
 
     // the queue: one family for graphics, compute and transfer
     vkGetPhysicalDeviceQueueFamilyProperties(dev.physical, &n, nullptr);
@@ -374,6 +378,7 @@ bool create_device() {
 
     load_device(dev.device);
     vkGetDeviceQueue(dev.device, dev.queue_family, 0, &dev.queue);
+    dlss_attach();   // (hookshot, vk_dlss.cpp: the device to NVIDIA Streamline, before any swapchain)
     if (dev.buffer_marker) buffer_markers_init();
     coopmat_init();
     if (dev.push_descriptor) {
@@ -676,6 +681,7 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
         logf("vk: vulkan-1.dll not found");
         return nullptr;
     }
+    dlss_start();   // (hookshot, vk_dlss.cpp: NVIDIA Streamline before the instance, when the NVIDIA DLSS row is on)
     if (!create_instance() || !pick_device() || !create_device()) return nullptr;
     logf("vk: %s, Vulkan %u.%u, driver %#x; mesh shaders %s, host memory import %s, pipeline libraries %s",
          dev.props.deviceName, VK_VERSION_MAJOR(dev.props.apiVersion), VK_VERSION_MINOR(dev.props.apiVersion),

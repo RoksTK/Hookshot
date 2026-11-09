@@ -1,0 +1,26 @@
+#version 450
+// (hookshot) NVIDIA DLSS in place of OoT's upscale networks (vk_dlss.cpp): the game hands its networks no motion vectors, so
+// each pixel's motion comes from the scene depth reprojected through this and the last frame's camera (the scene draws'
+// uniform buffer c3 keeps both). In render pixels, to the last frame. After Eden's/Lichii's OoT DLSS (Fritchii,
+// host_shaders/ocarina_camera_motion.comp).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene_depth;
+layout(binding = 1, rg16f) uniform writeonly image2D motion;
+layout(push_constant, row_major) uniform P { mat4 clip_to_previous_clip; } pc;
+void main() {
+    const ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 extent = imageSize(motion);
+    if (any(greaterThanEqual(g, extent))) return;
+    const vec2 size = vec2(extent);
+    const float depth = texelFetch(scene_depth, g, 0).r;
+    const vec2 screen = (vec2(g) + 0.5) / size;
+    // (the game's path is unjittered, with [-1, 1] clip depth and a negative viewport height)
+    const vec4 clip = vec4(screen * vec2(2, -2) + vec2(-1, 1), depth * 2 - 1, 1);
+    const vec4 previous = pc.clip_to_previous_clip * clip;
+    vec2 pixels = vec2(0);
+    if (depth >= 0 && depth <= 1 && previous.w > 1e-6) {
+        const vec2 d = (previous.xy / previous.w - clip.xy) * vec2(0.5, -0.5) * size;
+        if (all(lessThanEqual(abs(d), vec2(65504)))) pixels = d;
+    }
+    imageStore(motion, g, vec4(pixels, 0, 0));
+}
