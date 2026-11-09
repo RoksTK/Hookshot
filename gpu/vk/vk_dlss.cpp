@@ -682,11 +682,16 @@ void dlss_note_draw(const void* c3, uint64_t c3_size, uint32_t color_w, uint32_t
 
 bool dlss_dispatch(VkCommandBuffer cmd, uint64_t key, VkImageView input_view, const Texture* input, VkImageView output_view,
                    const Texture* output, uint32_t output_level) {
-    if (!dlss_key(key) || sl_state.failed) return false;
+    if (!dlss_active() || sl_state.failed) return false;
     if (!dlss_setup()) return false;
     free_retired();
     if (!input || !output || !input_view || !output_view) return decline("no input or output image");
-    if (output->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return decline("unexpected output format");
+    // (the scene's upscale networks only: the scene colour (B10G11R11, read as RGB9E5) into the output, never smaller. The game has one
+    // per Resolution step: 9dc98871eb7fc101 100-83%, fd029a317a9a4b94 75%, 6676619641320ba7 67%, f10782f9e58b6a7c 58%,
+    // 72ba090c70fe2614 50%, 19346f9c9299279e 42%, 0775215f8da720e6 33%. The movie's and the HUD's networks read other formats)
+    if (input->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32 || output->format != VK_FORMAT_B10G11R11_UFLOAT_PACK32) return false;
+    if (std::max(1u, output->width >> output_level) < input->width && std::max(1u, output->height >> output_level) < input->height)
+        return false;
     Camera cam;
     {
         std::lock_guard lk(camera_mu);
@@ -745,8 +750,8 @@ bool dlss_dispatch(VkCommandBuffer cmd, uint64_t key, VkImageView input_view, co
             logf("dlss: slDLSSSetOptions failed (result %d): the game's networks run from now on", (int)r);
             return false;
         }
-        logf("dlss: %ux%u -> %ux%u (%.1f%%), mode %d, preset %d (%s)", rw, rh, ow, oh, 100.0 * rw / ow, (int)o.mode, (int)p,
-             key == kNetworkFull ? "full-size network" : "3/4 network");
+        logf("dlss: %ux%u -> %ux%u (%.1f%%), mode %d, preset %d (network %016llx)", rw, rh, ow, oh, 100.0 * rw / ow, (int)o.mode, (int)p,
+             (unsigned long long)key);
         dlss.render_w = rw, dlss.render_h = rh, dlss.out_w = ow, dlss.out_h = oh, dlss.preset = preset_row;
     }
     sl::FrameToken* token = nullptr;

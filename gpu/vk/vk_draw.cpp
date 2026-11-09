@@ -6521,7 +6521,10 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
             logf("%s", line);
         }
     }
-    if (dlss_key(p.key) && dlss_stand_in(cmd, s, p)) return void(st_dispatches++);
+    // (hookshot, vk_dlss.cpp) every one of the game's upscale networks, one per Resolution step: a network (cooperative matrices)
+    // with one texture and one image, the scene's colour into the output (checked further in dlss_dispatch)
+    if (dlss_active() && !p.stages.empty() && p.stages[0].info.uses_cooperative_matrix && dlss_stand_in(cmd, s, p))
+        return void(st_dispatches++);
     if (taau_stand_in(cmd, s, p)) return void(st_dispatches++);
     if (!p.compute_pipeline) SKIP_HERE();
     dump_ssbos(cmd, p, "before");
