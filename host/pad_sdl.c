@@ -63,7 +63,8 @@ static float hd_values[2][4] = {{0.0f, 160.0f, 0.0f, 320.0f}, {0.0f, 160.0f, 0.0
 /* (motion) the pad read and its filter (the polling thread's own), then what the game is handed (under state_lock): the
    last HOS_MOTION_HISTORY readings, newest at motion_hist[motion_head]; gyro_status for the menu */
 static HosMotion motion;
-static int64_t motion_ns, motion_reading_ns, motion_log_ns, motion_readings;
+static int64_t motion_ns, motion_reading_ns, motion_log_ns, motion_readings, motion_start_ns;
+static int motion_warned;
 static int motion_pad = -1;
 static uint32_t motion_serial;
 static HosMotionSample motion_hist[HOS_MOTION_HISTORY];
@@ -223,26 +224,42 @@ static void motion_poll(int64_t now, int count) {
             memcpy(motion.bias, pads[pick].bias, sizeof motion.bias), motion.learned_t = pads[pick].bias_t;
         motion_pad = pick, motion_serial = pads[pick].serial, motion_ns = now;
         fresh = 1;
+        motion_start_ns = now, motion_warned = 0;
         hos_log("hid: motion controls from \"%s\"", hos_sdl_pad_name(pads[pick].gc));
     }
     /* the filter runs outside the lock (the game's input calls take it); a repeat of the last reading is no reading */
     const int64_t dt_ns = now - motion_ns;
     motion_ns = now;
+    {   /* (the Motion deadzone row: the console's tight, standard and loose zero-drift thresholds, turns a second) */
+        static const float zone[3] = {HOS_MOTION_THRESHOLD_TIGHT, HOS_MOTION_THRESHOLD, HOS_MOTION_THRESHOLD_LOOSE};
+        const int z = rx_option(HOS_OPT_GYRO_DEADZONE, 1);
+        motion.threshold = zone[z < 0 ? 0 : z > 2 ? 2 : z];
+    }
     if (!hos_motion_update(&motion, a, g, (float)(dt_ns / 1e9), rx_option(HOS_OPT_GYRO_SENS_X, 100) / 100.0f,
                            rx_option(HOS_OPT_GYRO_SENS_Y, 100) / 100.0f, rx_option(HOS_OPT_GYRO_INV_X, 0),
                            rx_option(HOS_OPT_GYRO_INV_Y, 0)) && !fresh)
         return;
+    if (!motion_warned && motion.learned_t <= 0 && now - motion_start_ns > 30000000000LL) {
+        motion_warned = 1;   /* (a pad noisier than the stillness test allows: its drift is never taken off) */
+        hos_log("hid: motion: \"%s\" has not been set down yet, so its gyroscope's drift is not learned: set it on a "
+                "table for a second (if it is on a table and this stays, its sensor may be noisier than the stillness "
+                "test allows)", hos_sdl_pad_name(pads[pick].gc));
+    }
     if (debug && now >= motion_log_ns) {   /* (twice a second: what the game gets) */
         motion_log_ns = now + 500000000LL;
-        hos_log("hid: motion: up (%+.2f, %+.2f, %+.2f), pitch/yaw/roll %+.2f %+.2f %+.2f rad/s, aim tilt %+.3f, yaw "
-                "%+.3f turns/s, bias (%+.4f, %+.4f, %+.4f)", motion.up[0], motion.up[1], motion.up[2], motion.rates[0],
-                motion.rates[1], motion.rates[2], motion.pitch, motion.out.gyro[1], motion.bias[0], motion.bias[1],
-                motion.bias[2]);
+        hos_log("hid: motion: accel (%+.2f, %+.2f, %+.2f) G, gyro (%+.3f, %+.3f, %+.3f) turns/s, direction rows "
+                "(%+.2f %+.2f %+.2f / %+.2f %+.2f %+.2f / %+.2f %+.2f %+.2f), bias (%+.4f, %+.4f, %+.4f)", motion.out.accel[0],
+                motion.out.accel[1], motion.out.accel[2], motion.out.gyro[0], motion.out.gyro[1], motion.out.gyro[2],
+                motion.out.direction[0], motion.out.direction[1], motion.out.direction[2], motion.out.direction[3],
+                motion.out.direction[4], motion.out.direction[5], motion.out.direction[6], motion.out.direction[7],
+                motion.out.direction[8], motion.bias[0], motion.bias[1], motion.bias[2]);
     }
     HosMotionSample r;
     r.st = motion.out;
     r.n = ++motion_readings;
-    r.dt_ns = fresh ? 5000000 : now - motion_reading_ns;   /* (the time since the reading before) */
+    /* (the time since the reading before, capped as the filter caps it: a stalled pad's next reading is no jump) */
+    r.dt_ns = fresh ? 5000000 : now - motion_reading_ns;
+    if (r.dt_ns > (int64_t)(HOS_MOTION_DT_MAX * 1e9)) r.dt_ns = (int64_t)(HOS_MOTION_DT_MAX * 1e9);
     motion_reading_ns = now;
     AcquireSRWLockExclusive(&state_lock);
     motion_head = (motion_head + 1) % HOS_MOTION_HISTORY;

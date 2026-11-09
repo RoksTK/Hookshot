@@ -841,7 +841,7 @@ HLE(_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util1
 /* SixAxisSensorState, 0x60 bytes: {i64 delta time (ns), i64 sampling number, f32 acceleration[3] (G), angular velocity[3]
    (revolutions a second), angle[3] (revolutions), direction[3][3], u32 attributes (1 connected), pad}. Newest first.
    (hookshot) With Motion controls on and a pad with a gyroscope (host/pad_sdl.c), the state OoT aims with
-   (host/hos_motion.h: the yaw rate and a tilt matrix, the rest neutral); else a pad lying still. */
+   (host/hos_motion.h: the full state, as the console and Eden build it); else a pad lying still. */
 HLE(_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE) {
     /* (the sampling number goes up once per reading, as the hardware's does: while live it is the readings' own count,
        moved on past the last number handed out; each entry is its own reading, with the time since the one before) */
@@ -853,11 +853,13 @@ HLE(_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxi
     int hos_sdl_motion_history(HosMotionSample *out, int max);   /* pad_sdl.c */
     HosMotionSample h[HOS_MOTION_HISTORY];
     const int live = count ? hos_sdl_motion_history(h, count) : 0;
+    /* (each switch between live and at rest moves the numbers a whole history past the last ones given out, so no entry
+       of one ever has a number an entry of the other had) */
     if (live) {
-        if (!was_live || six_base + h[0].n < six_sampling) six_base = six_sampling + 1 - h[0].n;
+        if (!was_live || six_base + h[0].n < six_sampling) six_base = six_sampling + HOS_MOTION_HISTORY - h[0].n;
         six_sampling = six_base + h[0].n;
     } else {
-        ++six_sampling;
+        six_sampling += was_live ? HOS_MOTION_HISTORY : 1;
     }
     was_live = live > 0;
     const int n = live ? live : count;
