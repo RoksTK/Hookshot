@@ -410,6 +410,16 @@ public:
             const nvn_p_bind_buf& u = s.ubo[nvn.stage][index - 3];
             uint32_t v = 0;
             if (u.addr && (uint64_t)offset + 4 <= (uint64_t)u.size) host->gpu_read(u.addr + offset, &v, 4);
+            {   // (hookshot, a test) a uniform buffer's value folded into a translation in play: the variant then holds it wherever
+                // it is used again (still_valid looks at the textures only). Logged once per code, stage, buffer and offset
+                static std::mutex mu;
+                static std::unordered_set<uint64_t> seen;
+                const uint64_t k = nvn.key ^ ((uint64_t)nvn.stage << 56) ^ ((uint64_t)index << 48) ^ ((uint64_t)offset << 20);
+                std::lock_guard lk(mu);
+                if (seen.insert(k).second && seen.size() < 4000)
+                    logf("vk: cbuf fold: code %016llx stage %u reads c%u[%#x] = %#x", (unsigned long long)nvn.key,
+                         nvn.stage, index, offset, v);
+            }
             return v;
         }
         return 0;
