@@ -5989,6 +5989,7 @@ bool prepare_run(void (*progress)(size_t done, size_t total), bool background) {
         if (FILE* w = fopen(warming.c_str(), "wb")) fclose(w);
     }
     auto blank = std::make_unique<NvnState>();
+    blank->seed = true;   // (vk_state.h: no uniform buffer values in the seed)
     blank->nvattr = 16;
     pcache_init();   // (once, here: the workers below build compute pipelines into it)
     std::atomic<size_t> next{0}, done{0}, made{0}, libs{0}, variants{0}, asking{0}, capped{0};

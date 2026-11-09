@@ -46,6 +46,10 @@ struct NvnState {
     uint32_t cs_push_n = 0;
     uint32_t grid[3]{};          // the dispatch being made (compute programs read it from c0)
     uint64_t samples_passed = 0;
+    // (hookshot) the blank state shaders are prepared with before the game (the seed): a program that reads a uniform buffer's
+    // value (ReadCbufValue, c3 and up) is left to play, where the real value is there. Translated with nothing bound it read
+    // zeros, folded into the program for good: the overbright light and the wrong caves after each new build
+    bool seed = false;
 };
 
 // texture / sampler pool registrations (by handle id), as nvn_register_* keep them in the WebGPU renderer

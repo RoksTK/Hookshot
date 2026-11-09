@@ -404,6 +404,9 @@ public:
             return 0x8000 | offset;   // (a slot's token: nothing is bound in the seed)
         if (index == 0 || index == 2) return driver_bank_word(s, (int)index, nvn.stage, offset);
         if (index >= 3 && index < 3 + 16) {
+            static const bool seed_values = getenv("RX_VK_SEED_CBUF") != nullptr;   // (A/B: as before, zeros folded in)
+            if (s.seed && !seed_values)
+                throw Shader::RuntimeError("c{}[{:#x}] read in the seed: left to play, where the value is there", index, offset);
             const nvn_p_bind_buf& u = s.ubo[nvn.stage][index - 3];
             uint32_t v = 0;
             if (u.addr && (uint64_t)offset + 4 <= (uint64_t)u.size) host->gpu_read(u.addr + offset, &v, 4);
@@ -2270,6 +2273,7 @@ std::unique_ptr<Program> seed_translate(const SeedStage* const by_stage[8], cons
             if (!code[k].ok) return st_failed++, nullptr;
         }
     auto blank = std::make_unique<NvnState>();
+    blank->seed = true;   // (vk_state.h: no uniform buffer values in the seed)
     blank->nvattr = 16;
     std::memcpy(blank->vattr, attributes, sizeof blank->vattr);
     auto p = std::make_unique<Program>();
@@ -2327,6 +2331,7 @@ SeedVariants seed_compute(size_t i, size_t cap, const std::function<void(Program
     const Code code = stage_of_seed(*cs);
     if (!code.ok) return st_failed++, r.failed = true, r;
     auto blank = std::make_unique<NvnState>();
+    blank->seed = true;   // (vk_state.h: no uniform buffer values in the seed)
     blank->nvattr = 16;
     seed_cs_control = seed.blob.data() + cs->control;
     struct Reset { ~Reset() { seed_cs_control = nullptr, forced = nullptr, seed_capture = nullptr; } } reset;
@@ -2457,6 +2462,7 @@ const Program* seed_variant_of(const uint64_t code[3], bool mesh, const uint32_t
         }
     const Code* fs = by_stage[1] ? &code_of[1] : nullptr;
     auto blank = std::make_unique<NvnState>();
+    blank->seed = true;   // (vk_state.h: no uniform buffer values in the seed)
     blank->nvattr = 16;
     std::memcpy(blank->vattr, attributes, sizeof blank->vattr);
     auto p = std::make_unique<Program>();
