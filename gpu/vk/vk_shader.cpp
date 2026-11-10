@@ -862,6 +862,176 @@ void dump_ir(const Program& p, const char* stage, const Shader::IR::Program& pro
     }
 }
 
+// ---- (hookshot) RX_VK_IR_PROBE=<program key>:<n>[,<n>]: a measuring tool for a wrong colour. That program's fragment stage writes
+// the IR values %n (numbered as RX_VK_IR's dump of the same stage) into its colour target 0 instead of its colour: red 1000 (a
+// marker no scene pixel has, to find the program's pixels), green the first value, blue the second, alpha 1. NaN guard off, so a
+// NaN shows. Read back with a frame dump (RX_VK_DUMP_RAW). U32 values as the float their bits are (registers carry floats
+// so), U1 as 0 or 1. A value
+// whose block does not dominate the colour writes is left out (0). Only with RX_VK_NO_PROGRAM_CACHE (nothing probed is kept).
+struct IrProbe {
+    uint64_t key = 0;
+    std::vector<size_t> idx;
+};
+const IrProbe& ir_probe() {
+    static const IrProbe pr = [] {
+        IrProbe r;
+        const char* e = getenv("RX_VK_IR_PROBE");
+        if (!e || !getenv("RX_VK_NO_PROGRAM_CACHE")) return r;
+        char* end;
+        r.key = strtoull(e, &end, 16);
+        if (*end == ':')
+            for (const char* q = end + 1; *q;) {
+                while (*q == '%' || *q == ',' || *q == ' ') q++;
+                if (!*q) break;
+                char* e2;
+                const unsigned long long v = strtoull(q, &e2, 10);
+                if (e2 == q) break;
+                r.idx.push_back((size_t)v);
+                q = e2;
+            }
+        if (r.idx.size() > 2) r.idx.resize(2);
+        return r;
+    }();
+    return pr;
+}
+bool ir_probe_wanted(uint64_t key) {
+    const IrProbe& pr = ir_probe();
+    return pr.key && pr.key == key && !pr.idx.empty();
+}
+/// The places (block, position in it) of the instructions RX_VK_IR's dump numbers n: the same walk as Shader::IR::DumpProgram
+/// (blocks first, then each instruction's result before its arguments, in order)
+std::vector<std::pair<size_t, size_t>> ir_places(const Shader::IR::Program& prog, const std::vector<size_t>& want) {
+    namespace IR = Shader::IR;
+    std::map<const IR::Inst*, size_t> index;
+    size_t next = prog.blocks.size();
+    const auto number = [&](const IR::Inst* inst) {
+        if (index.emplace(inst, next + 1).second) ++next;
+    };
+    std::map<const IR::Inst*, std::pair<size_t, size_t>> where;
+    for (size_t b = 0; b < prog.blocks.size(); b++) {
+        size_t pos = 0;
+        for (const IR::Inst& inst : prog.blocks[b]->Instructions()) {
+            where[&inst] = {b, pos++};
+            if (IR::TypeOf(inst.GetOpcode()) != IR::Type::Void) number(&inst);
+            for (size_t a = 0; a < inst.NumArgs(); a++) {
+                const IR::Value arg{inst.Arg(a)};
+                if (arg.IsEmpty()) continue;
+                if (!arg.IsImmediate() || arg.IsIdentity()) number(arg.Inst());
+            }
+        }
+    }
+    std::vector<std::pair<size_t, size_t>> out;
+    for (const size_t n : want) {
+        std::pair<size_t, size_t> place{SIZE_MAX, SIZE_MAX};
+        for (const auto& [inst, i] : index)
+            if (i == n) {
+                if (const auto it = where.find(inst); it != where.end()) place = it->second;
+                break;
+            }
+        out.push_back(place);
+    }
+    return out;
+}
+/// Puts the probe into prog (a fresh translation of the stage whose emitted twin `dumped` the dump was made of)
+bool ir_probe_apply(uint64_t key, const Shader::IR::Program& dumped, Shader::IR::Program& prog) {
+    namespace IR = Shader::IR;
+    const IrProbe& pr = ir_probe();
+    if (dumped.blocks.size() != prog.blocks.size()) {
+        logf("vk: IR probe %016llx: the second translation differs (%zu blocks, %zu before): not probed", (unsigned long long)key,
+             prog.blocks.size(), dumped.blocks.size());
+        return false;
+    }
+    const auto places = ir_places(dumped, pr.idx);
+    std::vector<IR::Inst*> targets;
+    std::vector<size_t> target_block;
+    for (size_t k = 0; k < places.size(); k++) {
+        IR::Inst* t = nullptr;
+        if (places[k].first < prog.blocks.size()) {
+            size_t pos = 0;
+            for (IR::Inst& inst : prog.blocks[places[k].first]->Instructions())
+                if (pos++ == places[k].second) { t = &inst; break; }
+        }
+        if (!t) logf("vk: IR probe %016llx: %%%zu not found", (unsigned long long)key, pr.idx[k]);
+        targets.push_back(t);
+        target_block.push_back(places[k].first);
+    }
+    // (the colour writes of target 0, and their block)
+    std::vector<IR::Inst*> writes;
+    size_t write_block = SIZE_MAX;
+    for (size_t b = 0; b < prog.blocks.size(); b++)
+        for (IR::Inst& inst : prog.blocks[b]->Instructions())
+            if (inst.GetOpcode() == IR::Opcode::SetFragColor && inst.Arg(0).IsImmediate() && inst.Arg(0).U32() == 0) {
+                if (write_block != SIZE_MAX && write_block != b) {
+                    logf("vk: IR probe %016llx: colour 0 written in more than one block: not probed", (unsigned long long)key);
+                    return false;
+                }
+                write_block = b, writes.push_back(&inst);
+            }
+    if (writes.empty()) {
+        logf("vk: IR probe %016llx: no colour 0 write", (unsigned long long)key);
+        return false;
+    }
+    // (dominators, iteratively: a value used in the writes' block must come from a block on every path to it)
+    const size_t nb = prog.blocks.size();
+    std::map<const IR::Block*, size_t> bi;
+    for (size_t b = 0; b < nb; b++) bi[prog.blocks[b]] = b;
+    std::vector<std::vector<char>> dom(nb, std::vector<char>(nb, 1));
+    dom[0].assign(nb, 0), dom[0][0] = 1;
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (size_t b = 1; b < nb; b++) {
+            std::vector<char> d(nb, 1);
+            bool any = false;
+            for (const IR::Block* pred : prog.blocks[b]->ImmPredecessors()) {
+                const auto it = bi.find(pred);
+                if (it == bi.end()) continue;
+                any = true;
+                for (size_t i = 0; i < nb; i++) d[i] = d[i] && dom[it->second][i];
+            }
+            if (!any) d.assign(nb, 0);
+            d[b] = 1;
+            if (d != dom[b]) dom[b] = d, changed = true;
+        }
+    }
+    const auto first_write_pos = [&] {
+        size_t pos = 0;
+        for (IR::Inst& inst : prog.blocks[write_block]->Instructions()) {
+            if (&inst == writes.front()) return pos;
+            pos++;
+        }
+        return pos;
+    }();
+    IR::Block& wb = *prog.blocks[write_block];
+    IR::F32 vals[2];
+    for (size_t k = 0; k < 2; k++) {
+        IR::IREmitter ir{wb, wb.Instructions().iterator_to(*writes.front())};
+        vals[k] = ir.Imm32(0.0f);
+        if (k >= targets.size() || !targets[k]) continue;
+        const size_t tb = target_block[k];
+        const bool ok = tb == write_block ? places[k].second < first_write_pos : dom[write_block][tb] != 0;
+        if (!ok) {
+            logf("vk: IR probe %016llx: %%%zu (block $%zu) does not reach the colour writes (block $%zu): 0 in its place",
+                 (unsigned long long)key, pr.idx[k], tb, write_block);
+            continue;
+        }
+        IR::Value v{targets[k]};
+        const IR::Type t = targets[k]->Type();
+        if (t == IR::Type::F32) vals[k] = IR::F32{v};
+        else if (t == IR::Type::U32) vals[k] = ir.BitCast<IR::F32, IR::U32>(IR::U32{v});   // (float bits in a register, as a shader carries them)
+        else if (t == IR::Type::U1) vals[k] = IR::F32{ir.Select(IR::U1{v}, ir.Imm32(1.0f), ir.Imm32(0.0f))};
+        else logf("vk: IR probe %016llx: %%%zu is of type %d: 0 in its place", (unsigned long long)key, pr.idx[k], (int)t);
+    }
+    for (IR::Inst* w : writes) {
+        const uint32_t c = w->Arg(1).U32();
+        IR::IREmitter ir{wb, wb.Instructions().iterator_to(*w)};
+        w->SetArg(2, c == 0 ? IR::Value{ir.Imm32(1000.0f)} : c == 1 ? IR::Value{vals[0]} : c == 2 ? IR::Value{vals[1]}
+                                                                                         : IR::Value{ir.Imm32(1.0f)});
+    }
+    logf("vk: IR probe %016llx: colour 0 is now red 1000, green %%%zu, blue %%%zu", (unsigned long long)key, pr.idx[0],
+         pr.idx.size() > 1 ? pr.idx[1] : (size_t)0);
+    return true;
+}
+
 /// Translates a program variant's stages into p (on a worker for graphics programs: s and the codes are copies)
 // (hookshot) ir_opt/oot_visual_workaround.h, on the game's programs
 void oot_visual(Shader::IR::Program& program, uint64_t key) {
@@ -1466,14 +1636,24 @@ void translate_into(Program& p, const NvnState& s, const Code* vsc, const Code* 
                 frt.previous_stage_stores = vs->program.info.stores;
                 for (int i = 0; i < 8; i++) frt.color_output_types[i] = static_cast<Shader::AttributeType>(color_types[i]);
                 static const bool nan_guard = !getenv("RX_VK_NAN_GUARD") || atoi(getenv("RX_VK_NAN_GUARD")) != 0;
-                if (nan_guard) {
-                    uint32_t float_targets = 0;
-                    for (int i = 0; i < 8; i++)
-                        if (frt.color_output_types[i] == Shader::AttributeType::Float) float_targets |= 1u << i;
-                    Shader::Optimization::GuardFragmentOutputs(fs->program, float_targets);
-                }
-                const std::vector<uint32_t> fspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), frt, fs->program, bindings);
+                uint32_t float_targets = 0;
+                for (int i = 0; i < 8; i++)
+                    if (frt.color_output_types[i] == Shader::AttributeType::Float) float_targets |= 1u << i;
+                if (nan_guard) Shader::Optimization::GuardFragmentOutputs(fs->program, float_targets);
+                const Shader::Backend::Bindings before_fs = bindings;
+                std::vector<uint32_t> fspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), frt, fs->program, bindings);
                 dump_ir(p, "fragment", fs->program);
+                if (ir_probe_wanted(p.key)) {   // (RX_VK_IR_PROBE: the same stage again, its colour replaced by the values asked for)
+                    Env probe_env{s, *fsc, Shader::Stage::Fragment};
+                    auto pf = translate(probe_env, true);
+                    oot_visual(pf->program, fsc->key);
+                    if (nan_guard) Shader::Optimization::GuardFragmentOutputs(pf->program, float_targets);
+                    if (ir_probe_apply(p.key, fs->program, pf->program)) {
+                        Shader::Backend::Bindings again = before_fs;
+                        fspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), frt, pf->program, again);
+                        bindings = again;
+                    }
+                }
                 Stage f;
                 f.nvn_stage = 1;
                 f.info = fs->program.info;
@@ -1490,7 +1670,7 @@ void translate_into(Program& p, const NvnState& s, const Code* vsc, const Code* 
         st_translated++;
         ptr_diag_log(p.key, csc ? "compute" : fsc ? "graphics" : "vertex");
         if (seed_capture) *seed_capture = std::move(kept);
-        else program_cache_save(p, kept);
+        else if (!ir_probe_wanted(p.key)) program_cache_save(p, kept);
     } catch (const std::exception& e) {
         p.failed = true;
         const bool trial = forced && !forced->want.empty();   // (an answer seed_compute tries: it may well not translate)
