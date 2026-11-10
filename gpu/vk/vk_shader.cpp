@@ -886,8 +886,8 @@ const IrProbe& ir_probe() {
                 char* e2;
                 const unsigned long long v = strtoull(q, &e2, 10);
                 if (e2 == q) break;
-                r.idx.push_back((size_t)v);
-                q = e2;
+                r.idx.push_back((size_t)v | (*e2 == 'u' ? (size_t(1) << 62) : 0));   // ('u': shown as an integer's number)
+                q = *e2 == 'u' ? e2 + 1 : e2;
             }
         if (r.idx.size() > 2) r.idx.resize(2);
         return r;
@@ -921,7 +921,8 @@ std::vector<std::pair<size_t, size_t>> ir_places(const Shader::IR::Program& prog
         }
     }
     std::vector<std::pair<size_t, size_t>> out;
-    for (const size_t n : want) {
+    for (const size_t nf : want) {
+        const size_t n = nf & ~(size_t(1) << 62);
         std::pair<size_t, size_t> place{SIZE_MAX, SIZE_MAX};
         for (const auto& [inst, i] : index)
             if (i == n) {
@@ -1017,6 +1018,7 @@ bool ir_probe_apply(uint64_t key, const Shader::IR::Program& dumped, Shader::IR:
         IR::Value v{targets[k]};
         const IR::Type t = targets[k]->Type();
         if (t == IR::Type::F32) vals[k] = IR::F32{v};
+        else if (t == IR::Type::U32 && (pr.idx[k] >> 62 & 1)) vals[k] = IR::F32{ir.ConvertUToF(32, 32, IR::U32{v})};
         else if (t == IR::Type::U32) vals[k] = ir.BitCast<IR::F32, IR::U32>(IR::U32{v});   // (float bits in a register, as a shader carries them)
         else if (t == IR::Type::U1) vals[k] = IR::F32{ir.Select(IR::U1{v}, ir.Imm32(1.0f), ir.Imm32(0.0f))};
         else logf("vk: IR probe %016llx: %%%zu is of type %d: 0 in its place", (unsigned long long)key, pr.idx[k], (int)t);
@@ -1029,6 +1031,78 @@ bool ir_probe_apply(uint64_t key, const Shader::IR::Program& dumped, Shader::IR:
     }
     logf("vk: IR probe %016llx: colour 0 is now red 1000, green %%%zu, blue %%%zu", (unsigned long long)key, pr.idx[0],
          pr.idx.size() > 1 ? pr.idx[1] : (size_t)0);
+    return true;
+}
+
+// (RX_VK_IR_PROBE_V=<n>[,<n>], with RX_VK_IR_PROBE for the same program: its vertex stage writes the vertex IR values %n (numbered
+// as RX_VK_IR's vertex dump) into the outputs Generic14X and Generic14Y, for the fragment probe to show (it reads those back)
+std::vector<size_t> ir_probe_v() {
+    static const std::vector<size_t> v = [] {
+        std::vector<size_t> r;
+        for (const char* q = getenv("RX_VK_IR_PROBE_V"); q && *q && r.size() < 2;) {
+            while (*q == '%' || *q == ',' || *q == ' ') q++;
+            char* e;
+            const unsigned long long n = strtoull(q, &e, 10);
+            if (e == q) break;
+            r.push_back((size_t)n | (*e == 'u' ? (size_t(1) << 62) : 0));
+            q = *e == 'u' ? e + 1 : e;
+        }
+        return r;
+    }();
+    return v;
+}
+bool ir_probe_v_apply(uint64_t key, const Shader::IR::Program& dumped, Shader::IR::Program& prog) {
+    namespace IR = Shader::IR;
+    const std::vector<size_t> want = ir_probe_v();
+    if (want.empty() || dumped.blocks.size() != prog.blocks.size()) return false;
+    const auto places = ir_places(dumped, want);
+    IR::Inst* outs[2]{};
+    size_t out_block = SIZE_MAX, out_pos = SIZE_MAX;
+    for (size_t b = 0; b < prog.blocks.size(); b++) {
+        size_t pos = 0;
+        for (IR::Inst& inst : prog.blocks[b]->Instructions()) {
+            if (inst.GetOpcode() == IR::Opcode::SetAttribute && inst.Arg(0).IsImmediate()) {
+                const IR::Attribute a = inst.Arg(0).Attribute();
+                const int k = a == IR::Attribute::Generic14X ? 0 : a == IR::Attribute::Generic14Y ? 1 : -1;
+                if (k >= 0 && !outs[k]) {
+                    outs[k] = &inst;
+                    if (out_block == SIZE_MAX) out_block = b, out_pos = pos;
+                }
+            }
+            pos++;
+        }
+    }
+    if (!outs[0] || !outs[1]) {
+        logf("vk: IR probe %016llx: the vertex stage writes no Generic14X / Y", (unsigned long long)key);
+        return false;
+    }
+    size_t k = 0;
+    for (IR::Inst* o : outs) {
+        IR::Block& ob = *prog.blocks[out_block];
+        IR::IREmitter ir{ob, ob.Instructions().iterator_to(*o)};
+        IR::F32 val = ir.Imm32(0.0f);
+        IR::Inst* t = nullptr;
+        if (k < places.size() && places[k].first < prog.blocks.size()) {
+            size_t pos = 0;
+            for (IR::Inst& inst : prog.blocks[places[k].first]->Instructions())
+                if (pos++ == places[k].second) { t = &inst; break; }
+        }
+        // (one block to the outputs, or the value's block before it in the list: what the vertex stages here are)
+        const bool ok = t && (places[k].first < out_block || (places[k].first == out_block && places[k].second < out_pos));
+        if (k < want.size() && !ok) logf("vk: IR probe %016llx: vertex %%%zu not usable: 0 in its place", (unsigned long long)key, want[k]);
+        if (k < want.size() && ok) {
+            const IR::Value v{t};
+            const IR::Type ty = t->Type();
+            if (ty == IR::Type::F32) val = IR::F32{v};
+            else if (ty == IR::Type::U32 && (want[k] >> 62 & 1)) val = IR::F32{ir.ConvertUToF(32, 32, IR::U32{v})};
+            else if (ty == IR::Type::U32) val = ir.BitCast<IR::F32, IR::U32>(IR::U32{v});
+            else if (ty == IR::Type::U1) val = IR::F32{ir.Select(IR::U1{v}, ir.Imm32(1.0f), ir.Imm32(0.0f))};
+        }
+        o->SetArg(1, val);
+        k++;
+    }
+    logf("vk: IR probe %016llx: vertex outputs Generic14X / Y are now vertex %%%zu, %%%zu", (unsigned long long)key, want[0],
+         want.size() > 1 ? want[1] : (size_t)0);
     return true;
 }
 
@@ -1610,8 +1684,18 @@ void translate_into(Program& p, const NvnState& s, const Code* vsc, const Code* 
             vrt.convert_depth_mode = host->depth_minus_w() != 0;
             Stage v;
             v.nvn_stage = 0;
-            const std::vector<uint32_t> vspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), vrt, vs->program, bindings);
+            const Shader::Backend::Bindings before_vs = bindings;
+            std::vector<uint32_t> vspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), vrt, vs->program, bindings);
             dump_ir(p, "vertex", vs->program);
+            if (ir_probe_wanted(p.key) && !ir_probe_v().empty()) {   // (RX_VK_IR_PROBE_V: the vertex stage again, two outputs replaced)
+                Env probe_env{s, *vsc, Shader::Stage::VertexB};
+                auto pv = translate(probe_env, true);
+                if (ir_probe_v_apply(p.key, vs->program, pv->program)) {
+                    Shader::Backend::Bindings again = before_vs;
+                    vspirv = Shader::Backend::SPIRV::EmitSPIRV(profile(), vrt, pv->program, again);
+                    bindings = again;
+                }
+            }
             {   // (the programs that read the draw's parameters from the driver bank, each once)
                 const auto& ld = vs->program.info.loads;
                 const bool bi = ld[Shader::IR::Attribute::BaseInstance], bv = ld[Shader::IR::Attribute::BaseVertex],
