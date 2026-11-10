@@ -15,7 +15,9 @@ size, then be capped by `OpArrayLength`. Concrete cbuf/descriptor inputs cover
 a hit at `0x1004` with size 2 and alignment 16, a miss at `0x1008`, an aligned-base
 control, short and zero-length descriptor caps, signed/unsigned loads and a
 high 64-bit base. These eight scenarios and the eleven upstream cases emit
-nineteen modules in total.
+nineteen modules. Two more vertex fixtures check that the 32-bit and
+128-bit load helpers default to `DontInline` and that the runtime workaround
+switches only the 128-bit helper to `Inline`.
 
 The additional `--cas-loops OUTPUT_DIRECTORY` case emits one real compute IR
 program with shared/storage byte writes, a storage/global float atomic add and
@@ -25,7 +27,7 @@ entry-block variable, reset before its loop, incremented once per failed or
 successful exchange, and tested against 1024 alongside the actual exchange
 success. The failed-attempt path must feed back the returned word and retry.
 The two alternative single-exchange global CAS routes must return directly,
-without being counted as retry loops. CI validates all twenty modules.
+without being counted as retry loops. CI validates all twenty-two modules.
 
 The fixture checks the emitted SPIR-V dependency chain; it does not execute a
 shader or driver, and does not validate odd guest addresses or AMD hardware. It

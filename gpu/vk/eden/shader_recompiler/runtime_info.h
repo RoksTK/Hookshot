@@ -96,6 +96,8 @@ struct RuntimeInfo {
 
     bool convert_depth_mode{};
     bool force_early_z{};
+    /// Work around drivers that mix up results across calls to the 128-bit global-load helper.
+    bool inline_global_128_loads{};
     /// (hookshot) a mesh stage with no task stage before it: its workgroups start at the draw's first, as a task stage's do
     bool mesh_without_task{};
     /// (hookshot) a GPU without VK_EXT_mesh_shader: task and mesh programs are compute shaders that write their stage

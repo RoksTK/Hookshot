@@ -1355,7 +1355,8 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         // the wall of trees in the sky. The culling's compute programs, with hundreds of global loads, keep the helper
         // (NVIDIA took 41 s on one inlined, above)
         static const bool gm_inline{!getenv("EDEN_NX2_GM_INLINE") || getenv("EDEN_NX2_GM_INLINE")[0] != '0'};
-        const bool inline_here{gm_inline && (stage == Stage::Task || stage == Stage::Mesh)};
+        const bool inline_here{gm_inline && (stage == Stage::Task || stage == Stage::Mesh ||
+                                            (shift == 4 && runtime_info.inline_global_128_loads))};
         const Id func_id{OpFunction(type, inline_here ? spv::FunctionControlMask::Inline : spv::FunctionControlMask::DontInline,
                                     function_type)};
         const Id addr{OpFunctionParameter(U64)};

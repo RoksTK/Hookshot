@@ -755,6 +755,51 @@ static void check_cas_program() {
     check_cas_functions(module);
 }
 
+static void check_vertex_load_controls(bool inline_128, const char* name) {
+    ObjectPool<IR::Inst> inst_pool;
+    IR::Block block{inst_pool};
+    IR::Program program;
+    program.stage = Stage::VertexB;
+    program.blocks.push_back(&block);
+    program.post_order_blocks.push_back(&block);
+    IR::AbstractSyntaxNode node{};
+    node.type = IR::AbstractSyntaxNode::Type::Block;
+    node.data.block = &block;
+    program.syntax_list.push_back(node);
+    program.syntax_list.push_back({.type = IR::AbstractSyntaxNode::Type::Return});
+
+    IR::IREmitter ir{block};
+    (void)ir.LoadGlobal32(ir.Imm64(u64{0x1000}));
+    (void)ir.LoadGlobal128(ir.Imm64(u64{0x1010}));
+    ir.Epilogue();
+    TestEnvironment env{program.stage};
+    Optimization::CollectShaderInfoPass(env, program);
+
+    Profile profile{};
+    profile.supported_spirv = 0x00010600;
+    profile.support_int64 = true;
+    profile.unified_descriptor_binding = true;
+    RuntimeInfo runtime_info{};
+    runtime_info.inline_global_128_loads = inline_128;
+    Backend::Bindings bindings{};
+    const auto module = inspect(save_module(name, EmitSPIRV(profile, runtime_info, program, bindings)));
+
+    using Control = spv::FunctionControlMask;
+    std::map<u32, Control> function_controls;
+    std::vector<Control> load_controls;
+    for (const auto& inst : module.instructions) {
+        if (inst.op == spv::Op::OpFunction)
+            function_controls.emplace(inst.words[1], static_cast<Control>(inst.words[2]));
+        if (inst.op == spv::Op::OpFunctionCall)
+            load_controls.push_back(function_controls.at(inst.words[2]));
+    }
+    const Control expected_128 = inline_128 ? spv::FunctionControlInlineMask : spv::FunctionControlDontInlineMask;
+    if (load_controls.size() != 2 || load_controls[0] != spv::FunctionControlDontInlineMask ||
+        load_controls[1] != expected_128)
+        fail("vertex global-load inlining must affect only the 128-bit helper");
+    std::printf("PASS: %s\n", name);
+}
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string(argv[1]) == "--cas-loops") {
         output_dir = argv[2];
@@ -794,4 +839,6 @@ int main(int argc, char** argv) {
     check_case(true, 0x0000000100000000ull, "mesh signed offset 0 high address", Stage::Mesh);
     check_write_case(true, 0x0000000100000000ull, 16, "mesh signed 16-bit store high address", Stage::Mesh);
     check_unsupported_profile();
+    check_vertex_load_controls(false, "vertex-global-load-default");
+    check_vertex_load_controls(true, "vertex-global-load-inline128");
 }
