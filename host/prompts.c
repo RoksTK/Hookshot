@@ -121,7 +121,7 @@ static int cmap4_bind(uint8_t *st, size_t n) {
     int done = 0;
     for (int b = 0; b < HOS_SW_N; b++) {
         const int pad = hos_binding(HOS_BIND_PAD, b, 0);
-        if (pad < 0 || pad >= HOS_PAD_N) continue;   /* (unbound: the default icon stays) */
+        if (pad < 0 || pad >= HOS_PAD_ART_N) continue;   /* (unbound or a paddle: the default icon stays) */
         const unsigned gid = cmap4_glyph(st, n, PAD_BASE + (unsigned)pad);
         if (!gid) continue;
         for (unsigned i = 0; i < segs; i++)
