@@ -498,8 +498,8 @@ static void stick_max(int32_t stick[4], const int32_t v[4]) {
         if ((v[i] < 0 ? -v[i] : v[i]) > (stick[i] < 0 ? -stick[i] : stick[i])) stick[i] = v[i];
 }
 
-/* ---- (hookshot) the controls: the gamepad input (by position) and the keys that press each Switch button, from
-   hookshot_options.ini beside the executable when it has them: pad_<button>=<HOS_PAD_* position, -1 none> and
+/* ---- (hookshot) the controls: the gamepad inputs (by position) and the keys that press each Switch button, from
+   hookshot_options.ini beside the executable when it has them: pad_<button>=<position>[,<position>] (HOS_PAD_*, -1 none) and
    key_<button>=<key code>,<key code> (Windows key codes, 0 none), <button> one of bind_names. Read once, at the
    first use; what the file leaves out keeps its default. Keys only, after the Switch's buttons (HOS_KEY_*): the left
    stick's and the camera's directions. A key can be a mouse button (1 2 4 5 6: left, right, middle, 4, 5), which counts
@@ -519,13 +519,25 @@ static const unsigned char key_default[HOS_KEY_N][2] = {
     {'E'}, {VK_SHIFT}, {VK_SPACE}, {VK_LBUTTON}, {VK_CONTROL}, {'C'}, {'Q'}, {'R'}, {'Z', VK_RBUTTON}, {'X', 'F'},
     {VK_TAB, VK_RETURN}, {'M'}, {'1'}, {'2'}, {'3'}, {'4'}, {'W'}, {'S'}, {'A'}, {'D'}, {VK_UP, 'I'}, {VK_DOWN, 'K'},
     {VK_LEFT, 'J'}, {VK_RIGHT, 'L'}};
-static volatile LONG pad_bind[HOS_SW_N], key_bind[HOS_KEY_N][2];   /* (the menu changes them as the game reads them) */
+static SRWLOCK pad_bind_lock = SRWLOCK_INIT;
+static int pad_bind[HOS_SW_N][2];
+static volatile LONG key_bind[HOS_KEY_N][2];   /* (the menu changes them as the game reads them) */
 
 static void binds_default(void) {
-    for (int i = 0; i < HOS_KEY_N; i++) {
-        if (i < HOS_SW_N) InterlockedExchange(&pad_bind[i], pad_default[i]);
-        for (int k = 0; k < 2; k++) InterlockedExchange(&key_bind[i][k], key_default[i][k]);
+    AcquireSRWLockExclusive(&pad_bind_lock);
+    for (int i = 0; i < HOS_SW_N; i++) {
+        pad_bind[i][0] = pad_default[i];
+        pad_bind[i][1] = -1;
     }
+    ReleaseSRWLockExclusive(&pad_bind_lock);
+    for (int i = 0; i < HOS_KEY_N; i++)
+        for (int k = 0; k < 2; k++) InterlockedExchange(&key_bind[i][k], key_default[i][k]);
+}
+
+static int pad_code(const char *text) {
+    char *end;
+    const long code = strtol(text, &end, 10);
+    return end != text && code >= 0 && code < HOS_PAD_N ? (int)code : -1;
 }
 
 static void binds_load(void) {
@@ -558,11 +570,11 @@ static void binds_load(void) {
             for (int i = 0; (pad || keys) && i < HOS_KEY_N; i++) {
                 if (strcmp(line + 4, bind_names[i]) || (pad && i >= HOS_SW_N)) continue;
                 changed++;
+                const char *comma = strchr(eq + 1, ',');
                 if (pad) {
-                    const int v = atoi(eq + 1);
-                    pad_bind[i] = v >= 0 && v < HOS_PAD_N ? v : -1;
+                    pad_bind[i][0] = pad_code(eq + 1);
+                    pad_bind[i][1] = comma ? pad_code(comma + 1) : -1;
                 } else {
-                    const char *comma = strchr(eq + 1, ',');
                     const int a = atoi(eq + 1), b = comma ? atoi(comma + 1) : 0;
                     key_bind[i][0] = a > 0 && a < 256 ? a : 0;
                     key_bind[i][1] = b > 0 && b < 256 ? b : 0;
@@ -589,10 +601,15 @@ int hos_binding(int set, int button, int slot) {
     binds_load();
     if (button < 0 || button >= (set == HOS_BIND_PAD ? HOS_SW_N : HOS_KEY_N) || slot < 0 || slot > 1)
         return set == HOS_BIND_PAD ? -1 : 0;
-    return set == HOS_BIND_PAD ? (slot ? -1 : (int)pad_bind[button]) : (int)key_bind[button][slot];
+    if (set != HOS_BIND_PAD) return (int)key_bind[button][slot];
+    AcquireSRWLockShared(&pad_bind_lock);
+    const int code = pad_bind[button][slot];
+    ReleaseSRWLockShared(&pad_bind_lock);
+    return code;
 }
-/* A gamepad input moved to another button gives that one this button's old input (one button an input, none left
-   without); a key moved to it is taken from the others */
+/* A gamepad input already bound to a slot trades places with the input being replaced; into an empty slot it is
+   taken only from a button that keeps another gamepad input (no button left without one). A key moved to a slot
+   is taken from the others. */
 void hos_bind(int set, int button, int slot, int code) {
     binds_load();
     if (button < 0) {
@@ -601,11 +618,28 @@ void hos_bind(int set, int button, int slot, int code) {
     }
     if (button >= (set == HOS_BIND_PAD ? HOS_SW_N : HOS_KEY_N) || slot < 0 || slot > 1) return;
     if (set == HOS_BIND_PAD) {
-        if (slot || code < -1 || code >= HOS_PAD_N) return;
-        const LONG old = pad_bind[button];
-        for (int i = 0; i < HOS_SW_N; i++)
-            if (i != button && code >= 0 && pad_bind[i] == code) InterlockedExchange(&pad_bind[i], old);
-        InterlockedExchange(&pad_bind[button], code);
+        if (code < -1 || code >= HOS_PAD_N) return;
+        AcquireSRWLockExclusive(&pad_bind_lock);
+        const int old = pad_bind[button][slot];
+        if (code >= 0 && code != old) {
+            /* (the input taken from where it is: it gets the replaced input; with none (an empty Input 2), its own
+               other input moves into its Input 1; a button it is the only gamepad input of keeps it, and nothing changes) */
+            for (int i = 0; i < HOS_SW_N; i++)
+                for (int k = 0; k < 2; k++)
+                    if (pad_bind[i][k] == code && old < 0 && pad_bind[i][1 - k] < 0) {
+                        ReleaseSRWLockExclusive(&pad_bind_lock);
+                        return;
+                    }
+            for (int i = 0; i < HOS_SW_N; i++)
+                for (int k = 0; k < 2; k++)
+                    if (pad_bind[i][k] == code) {
+                        if (old >= 0) pad_bind[i][k] = old;
+                        else if (k == 0) pad_bind[i][0] = pad_bind[i][1], pad_bind[i][1] = -1;
+                        else pad_bind[i][1] = -1;
+                    }
+        }
+        pad_bind[button][slot] = code;
+        ReleaseSRWLockExclusive(&pad_bind_lock);
     } else {
         if (code < 0 || code > 255) return;
         for (int i = 0; i < HOS_KEY_N; i++)
@@ -613,6 +647,18 @@ void hos_bind(int set, int button, int slot, int code) {
                 if (code && key_bind[i][k] == code) InterlockedExchange(&key_bind[i][k], 0);
         InterlockedExchange(&key_bind[button][slot], code);
     }
+}
+
+static uint64_t bound_pad_buttons(uint64_t raw) {
+    binds_load();
+    uint64_t buttons = 0;
+    AcquireSRWLockShared(&pad_bind_lock);
+    for (int i = 0; i < HOS_SW_N; i++) {
+        const int a = pad_bind[i][0], alt = pad_bind[i][1];
+        if ((a >= 0 && (raw >> a & 1)) || (alt >= 0 && (raw >> alt & 1))) buttons |= 1ULL << i;
+    }
+    ReleaseSRWLockShared(&pad_bind_lock);
+    return buttons;
 }
 
 static volatile LONG pad_raw_now;   /* the gamepads' inputs at the last read, 1 << HOS_PAD_* */
@@ -712,10 +758,7 @@ static void pads_read(uint64_t *buttons, int32_t stick[4]) {
        keeps): they reach the game only one at a time */
     const uint64_t chord = 1ULL << HOS_PAD_BACK | 1ULL << HOS_PAD_START;
     if ((raw & chord) == chord) raw &= ~chord;
-    binds_load();
-    uint64_t b = 0;
-    for (int i = 0; i < HOS_SW_N; i++)
-        if (pad_bind[i] >= 0 && (raw >> pad_bind[i] & 1)) b |= 1ULL << i;
+    const uint64_t b = bound_pad_buttons(raw);
     cached_buttons = b;
     memcpy(cached_stick, s, sizeof s);
     *buttons |= b;

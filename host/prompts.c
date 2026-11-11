@@ -159,7 +159,7 @@ static int cmap4_bind(uint8_t *st, size_t n, int face) {
     const unsigned base = PAD_BASE + FACE_CODES * (unsigned)face;
     int done = 0;
     for (int b = 0; b < HOS_SW_N; b++) {
-        const int pad = hos_binding(HOS_BIND_PAD, b, 0), bound = pad >= 0 && pad < HOS_PAD_N;
+        const int pad = hos_binding(HOS_BIND_PAD, b, 0), bound = pad >= 0 && pad < HOS_PAD_ART_N;   /* (a paddle: the default's icon) */
         const unsigned gid = cmap4_glyph(st, n, base + (unsigned)(bound ? pad : switch_pad[b]));
         if (gid && cmap4_point(st, segs, switch_code[b], gid)) done += bound;
     }
@@ -879,14 +879,14 @@ static int text_code(unsigned c, int face, const int *bind) {   /* the code that
         if (c == switch_code[i]) b = i;
     for (int i = 0; i < 3 && k < 0; i++)
         if (c == static_code[i]) k = i;
-    if (c >= BIND_BASE && c < BIND_BASE + HOS_PROMPT_N * HOS_SW_N * HOS_PAD_N) b = (int)((c - BIND_BASE) / HOS_PAD_N % HOS_SW_N);
+    if (c >= BIND_BASE && c < BIND_BASE + HOS_PROMPT_N * HOS_SW_N * HOS_PAD_ART_N) b = (int)((c - BIND_BASE) / HOS_PAD_ART_N % HOS_SW_N);
     if (c >= PAD_BASE + STATIC_AT && c < PAD_BASE + FACE_CODES * HOS_PROMPT_N && (c - PAD_BASE) % FACE_CODES >= STATIC_AT &&
         (c - PAD_BASE) % FACE_CODES < STATIC_AT + 3)
         k = (int)((c - PAD_BASE) % FACE_CODES - STATIC_AT);
     if (k >= 0) return PAD_BASE + FACE_CODES * face + STATIC_AT + k;
     if (b < 0) return -1;
-    const int pad = bind[b] >= 0 && bind[b] < HOS_PAD_N ? bind[b] : switch_pad[b];
-    return BIND_BASE + (face * HOS_SW_N + b) * HOS_PAD_N + pad;
+    const int pad = bind[b] >= 0 && bind[b] < HOS_PAD_ART_N ? bind[b] : switch_pad[b];   /* (a paddle: the default's icon) */
+    return BIND_BASE + (face * HOS_SW_N + b) * HOS_PAD_ART_N + pad;
 }
 
 /* the box's codes for the buttons as they are now; 1 when it changed them */

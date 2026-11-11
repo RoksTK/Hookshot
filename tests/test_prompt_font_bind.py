@@ -23,7 +23,8 @@ import prompt_assets  # noqa: E402
 import prompt_faces  # noqa: E402
 
 # (the Switch buttons bound in the test: A to the bottom face button, B to the right shoulder; the rest unbound)
-BIND = {0: 0, 1: 10}
+BIND = {0: 0, 1: 10, 3: 17}   # (Y on a paddle, HOS_PAD_RPADDLE1: no artwork, so its default's icon)
+ART = lambda b: b in BIND and BIND[b] < len(prompt_assets.PADS)   # (a binding the prompt font has an icon for)
 
 
 def check(cond, what):
@@ -85,6 +86,7 @@ def main():
         "#include <stdio.h>", "#include <stdlib.h>", "#include <string.h>", '#include "gpu/vk/vk_api.h"',
         "#define PAD_BASE 0xF700", "#define FACE_CODES %d" % prompt_assets.FACE_CODES,
         "#define STATIC_AT %d" % prompt_assets.STATIC_AT,
+        "_Static_assert(HOS_PAD_ART_N == %d, \"vk_api.h HOS_PAD_ART_N is not nx2/prompt_assets.py PADS\");" % len(prompt_assets.PADS),
         "static int hos_binding(int set, int button, int slot) {",
         "    (void)slot;",
         "    if (set != HOS_BIND_PAD) return -1;",
@@ -130,9 +132,10 @@ def main():
     nsw, nst = len(prompt_assets.SWITCH), len(prompt_assets.STATIC)
     for f, out in enumerate(outs):
         done, got = int(out[0]), [int(x) for x in out[1:]]
-        check(done == len(BIND), "face %d: %d buttons bound, not %d" % (f, done, len(BIND)))
+        nart = sum(1 for b in BIND if ART(b))
+        check(done == nart, "face %d: %d buttons bound, not %d" % (f, done, nart))
         for b, code in enumerate(prompt_assets.SWITCH):
-            want = 200 + 100 * f + (BIND[b] if b in BIND else pads_of[prompt_assets.DEFAULT[b]])
+            want = 200 + 100 * f + (BIND[b] if ART(b) else pads_of[prompt_assets.DEFAULT[b]])
             check(got[b] == want, "face %d: Switch button %d (U+%04X): glyph %d, not %d" % (f, b, code, got[b], want))
         for k, code in enumerate(prompt_assets.STATIC):
             check(got[nsw + k] == 290 + 100 * f + k, "face %d: d-pad icon U+%04X: glyph %d" % (f, code, got[nsw + k]))
@@ -140,8 +143,8 @@ def main():
             want = mapping.get(prompt_assets.PAD_BASE + c, 0)
             check(got[nsw + nst + c] == want, "face %d: face icon U+%04X moved" % (f, prompt_assets.PAD_BASE + c))
     texts = check_text_code(a.cc, src, nfaces)
-    print("ok: on each of %d faces, %d of %d Switch buttons pointed at the face's pad icons, the rest at its defaults', the "
-          "d-pad at its own; the faces' icons kept; %d text codes rewritten" % (nfaces, len(BIND), len(prompt_assets.SWITCH), texts))
+    print("ok: on each of %d faces, %d of %d Switch buttons pointed at the face's pad icons (a paddle at its default's), the "
+          "rest at their defaults', the d-pad at its own; the faces' icons kept; %d text codes rewritten" % (nfaces, len(BIND), len(prompt_assets.SWITCH), texts))
 
 
 def check_text_code(cc, src, nfaces):
@@ -194,7 +197,7 @@ def check_text_code(cc, src, nfaces):
                     want = prompt_assets.PAD_BASE + prompt_assets.FACE_CODES * f + prompt_assets.STATIC_AT + what[1]
                 else:
                     b = what[1]
-                    pad = BIND[b] if b in BIND else pads_of[prompt_assets.DEFAULT[b]]
+                    pad = BIND[b] if ART(b) else pads_of[prompt_assets.DEFAULT[b]]
                     want = prompt_assets.BIND_BASE + (f * nsw + b) * npad + pad
                 check(g == want, "face %d: text code U+%04X became %d, not %d" % (f, code, g, want))
     return len(codes)
